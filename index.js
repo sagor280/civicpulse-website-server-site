@@ -85,6 +85,17 @@ async function run() {
       res.send(result);
     })
 
+
+
+     //role Api
+    app.get('/users/:email/role', verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+      const query = { email }
+      const user = await userCollection.findOne(query);
+      res.send({ role: user?.role || 'user' })
+    })
+
+
     
   
     await client.db("admin").command({ ping: 1 });
