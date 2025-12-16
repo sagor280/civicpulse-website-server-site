@@ -1,0 +1,106 @@
+const express = require('express')
+const cors = require('cors');
+const app = express();
+require('dotenv').config();
+
+const { MongoClient, ServerApiVersion } = require('mongodb')
+const port = process.env.PORT || 3000
+
+const admin = require("firebase-admin");
+
+const serviceAccount = require('./civicpulse-website-firebase-adminsdk-fbsvc.json');
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+//middleWare 
+app.use(express.json());
+app.use(cors());
+const verifyFBToken = async (req, res, next) => {
+  console.log('headers in the middleware',req.headers?.authorization);
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  try {
+    const idToken = token.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    console.log("decoded in the token", decoded);
+
+    req.decoded_email = decoded.email;
+
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
+
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@sagorkumar.isv1anl.mongodb.net/?appName=SagorKumar`;
+
+// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
+});
+
+async function run() {
+  try {
+    await client.connect(); 
+    const db = client.db('civic-pluse-db')
+    const userCollection = db.collection('users')
+
+
+     app.post('/users', async (req, res) => {
+      const user = req.body
+      user.role = 'citizen';
+      user.isPremium = false;
+      user.isBlocked = false;
+      user.createdAt = new Date();
+      const email = user.email;
+      const userExists = await userCollection.findOne({ email })
+      if (userExists) {
+        return res.send({ message: 'user exists' })
+      }
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+
+    })
+
+    // get user api
+
+    app.get('/users', verifyFBToken, async (req, res) => {
+      const email = req.query.email;
+      const query = {}
+      if (email) {
+        query.email = email
+        if (req.decoded_email !== email) {
+          return res.status(403).send({ message: 'forbidden access' })
+        }
+      }
+      const result = await userCollection.find(query).toArray();
+      res.send(result);
+    })
+
+    
+  
+    await client.db("admin").command({ ping: 1 });
+    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+  } finally {
+   
+  }
+}
+run().catch(console.dir);
+
+app.get('/', (req, res) => {
+  res.send('civicpluse running...!')
+})
+
+app.listen(port, () => {
+  console.log(`Example app listening on port ${port}`)
+})
+
+
