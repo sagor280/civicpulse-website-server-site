@@ -3,7 +3,7 @@ const cors = require("cors");
 const app = express();
 require("dotenv").config();
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
 const port = process.env.PORT || 3000;
 
@@ -86,6 +86,32 @@ async function run() {
       res.send(result);
     });
 
+    //update user
+
+    app.patch("/users/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { displayName, phone, photoURL } = req.body;
+
+       const filter = { _id: new ObjectId(id) }
+    const updateDoc = {
+      $set: {
+        displayName,
+        phone,
+        ...(photoURL && { photoURL }),
+        updatedAt:new Date()
+      },
+    };
+
+    const result = await userCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
+
     app.post("/issues", verifyFBToken, async (req, res) => {
       const issue = req.body;
 
@@ -128,7 +154,7 @@ async function run() {
     mode: "payment",
     metadata: { userId, email },
     success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.SITE_DOMAIN}/dashboard`,
+    cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
   });
 
   res.send({ url: session.url });
