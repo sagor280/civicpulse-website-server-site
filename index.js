@@ -237,44 +237,59 @@ async function run() {
         trackingId,
       });
     });
-    
-     //issue delete
-    app.delete("/issues/:id",  verifyFBToken, checkBlockedUser, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) }
-      const cursor = await issuesCollection.deleteOne(query)
-      res.send(cursor);
+
+    // admin: get all issues
+    app.get("/issues/all", verifyFBToken,async (req, res) => {
+      const issues = await issuesCollection
+        .find()
+        .sort({ isBoosted: -1 })
+        .toArray();
+      res.send(issues);
     });
+
+    //issue delete
+    app.delete(
+      "/issues/:id",
+      verifyFBToken,
+      checkBlockedUser,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const cursor = await issuesCollection.deleteOne(query);
+        res.send(cursor);
+      }
+    );
     //issue update api
 
-    app.patch('/issues/:id', verifyFBToken, checkBlockedUser, async (req, res) => {
-      try {
-        const id = req.params.id;
-        const updateData = req.body;
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = {
-          $set: {
-            title: updateData.title,
-            catagory: updateData.category,
-            description: updateData.description,
-            photoURL: updateData.photoURL,
-            location: updateData.location,
-            updatedAt: new Date()
-          }
-        };
+    app.patch(
+      "/issues/:id",
+      verifyFBToken,
+      checkBlockedUser,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const updateData = req.body;
+          const filter = { _id: new ObjectId(id) };
+          const updateDoc = {
+            $set: {
+              title: updateData.title,
+              catagory: updateData.category,
+              description: updateData.description,
+              photoURL: updateData.photoURL,
+              location: updateData.location,
+              updatedAt: new Date(),
+            },
+          };
 
-        const result = await issuesCollection.updateOne(filter, updateDoc);
+          const result = await issuesCollection.updateOne(filter, updateDoc);
 
-        res.send(result);
-
-      } catch (error) {
-        console.log("Update Issue Error:", error);
-        res.status(500).send({ message: "Internal Server Error" });
+          res.send(result);
+        } catch (error) {
+          console.log("Update Issue Error:", error);
+          res.status(500).send({ message: "Internal Server Error" });
+        }
       }
-    });
-
-
-
+    );
 
     // Get count of issues by user
     app.get("/issues/count/:userId", verifyFBToken, async (req, res) => {
@@ -289,8 +304,6 @@ async function run() {
         res.status(500).json({ message: "Server error" });
       }
     });
-
-
 
     // ------------------- Payment APIs -------------------
 
