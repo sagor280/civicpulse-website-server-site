@@ -148,6 +148,20 @@ async function run() {
       }
     });
 
+    // Get issues of a logged-in user
+    app.get("/myissues", verifyFBToken, checkBlockedUser, async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) return res.status(400).json({ message: "Email required" });
+
+        const issues = await issuesCollection.find({ email }).toArray();
+        res.json(issues);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
     // Update user
     app.patch("/users/:id", verifyFBToken, async (req, res) => {
       try {
@@ -223,6 +237,44 @@ async function run() {
         trackingId,
       });
     });
+    
+     //issue delete
+    app.delete("/issues/:id",  verifyFBToken, checkBlockedUser, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const cursor = await issuesCollection.deleteOne(query)
+      res.send(cursor);
+    });
+    //issue update api
+
+    app.patch('/issues/:id', verifyFBToken, checkBlockedUser, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updateData = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: {
+            title: updateData.title,
+            catagory: updateData.category,
+            description: updateData.description,
+            photoURL: updateData.photoURL,
+            location: updateData.location,
+            updatedAt: new Date()
+          }
+        };
+
+        const result = await issuesCollection.updateOne(filter, updateDoc);
+
+        res.send(result);
+
+      } catch (error) {
+        console.log("Update Issue Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+
+
 
     // Get count of issues by user
     app.get("/issues/count/:userId", verifyFBToken, async (req, res) => {
@@ -237,6 +289,8 @@ async function run() {
         res.status(500).json({ message: "Server error" });
       }
     });
+
+
 
     // ------------------- Payment APIs -------------------
 
@@ -262,6 +316,114 @@ async function run() {
       });
 
       res.send({ url: session.url });
+    });
+
+    // Create boost session
+    app.post(
+      "/payment-checkout-session/boosting",
+      verifyFBToken,
+      checkBlockedUser,
+      async (req, res) => {
+        const { Issueid, Issuetitle, price, createrEmail, trackingId } =
+          req.body;
+        const amount = parseInt(price) * 100;
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: "bdt",
+                unit_amount: amount,
+                product_data: { name: `Boost Issue: ${Issuetitle}` },
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          metadata: { Issueid, Issuetitle, trackingId },
+          customer_email: createrEmail,
+          success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success-boosting?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled-boosting`,
+        });
+        res.json({ url: session.url });
+      }
+    );
+
+    // Boosting payment success
+    app.patch("/payment-success-boosting", async (req, res) => {
+      try {
+        const sessionId = req.query.session_id;
+        if (!sessionId)
+          return res.status(400).json({ message: "Session ID missing" });
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        const transactionId = session.payment_intent;
+
+        const paymentExist = await paymentCollection.findOne({ transactionId });
+        if (paymentExist)
+          return res.json({
+            message: "Payment already exists",
+            transactionId,
+            trackingId: session.metadata.trackingId,
+          });
+
+        if (session.payment_status === "paid") {
+          const Issueid = session.metadata.Issueid;
+          const trackingId = session.metadata.trackingId;
+
+          // Update issue priority
+          await issuesCollection.updateOne(
+            { _id: new ObjectId(Issueid) },
+            { $set: { priority: "high" } }
+          );
+
+          // Record payment
+          const payment = {
+            IssueId: Issueid,
+            IssueName: session.metadata.Issuetitle,
+            amount: session.amount_total / 100,
+            currency: session.currency,
+            customerEmail: session.customer_email,
+            transactionId,
+            paymentStatus: session.payment_status,
+            paymentType: "Boosting",
+            paidAt: new Date(),
+            trackingId,
+          };
+          await paymentCollection.insertOne(payment);
+
+          // Record tracking log
+          const trackingExist = await trackingsCollection.findOne({
+            transactionId,
+            Boosting: "Boost the issue",
+          });
+          if (!trackingExist) {
+            await trackingsCollection.insertOne({
+              trackingId,
+              transactionId,
+              status: "pending",
+              Boosting: "Boost the issue",
+              updatedBy: Issueid,
+              role: "citizen",
+              message: "Issue boosted by citizen",
+              createdAt: new Date(),
+            });
+          }
+
+          return res.json({
+            success: true,
+            transactionId,
+            trackingId,
+            paymentInfo: payment,
+          });
+        }
+
+        res.status(400).json({ message: "Payment not completed" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Boost payment verification failed" });
+      }
     });
 
     app.patch("/payment-success", verifyFBToken, async (req, res) => {
