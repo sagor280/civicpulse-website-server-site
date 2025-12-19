@@ -35,6 +35,8 @@ const verifyFBToken = async (req, res, next) => {
   }
 };
 
+
+
 // MongoDB Connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@sagorkumar.isv1anl.mongodb.net/?appName=SagorKumar`;
 const client = new MongoClient(uri, {
@@ -89,6 +91,21 @@ async function run() {
       return await trackingsCollection.insertOne(log);
     };
 
+    // ------------------- Admin Middleware -------------------
+    const verifyAdmin = async (req, res, next) => {
+      try {
+        const email = req.decoded_email;
+        const user = await userCollection.findOne({ email });
+        if (!user || user.role !== "admin") {
+          return res.status(403).json({ message: "Admin access required" });
+        }
+        next();
+      } catch (err) {
+        console.error("verifyAdmin Error:", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    };
+
     // ------------------- User APIs -------------------
 
     // Create user
@@ -126,7 +143,7 @@ async function run() {
       res.json({ role: user?.role || "user" });
     });
 
-    // --- NEW: Get user ID by email (for client-side use) ---
+    // --- NEW: Get user ID by email 
     app.get("/users/:email/id", verifyFBToken, async (req, res) => {
       try {
         const email = req.params.email;
@@ -184,6 +201,78 @@ async function run() {
       }
     });
 
+    
+
+    // ------------------- All Issues (Admin) -------------------
+    app.get("/issues/all", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const issues = await issuesCollection
+          .find()
+          .sort({ isBoosted: -1 })
+          .toArray();
+        res.json(issues);
+      } catch (err) {
+        console.error("Get All Issues Error:", err);
+        res.status(500).json({ message: "Failed to fetch issues" });
+      }
+    });
+
+    // ------------------- Reject Issue (Admin) -------------------
+    app.patch(
+      "/issues/reject/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+
+          // Check issue exists
+          const issue = await issuesCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          if (!issue) {
+            return res
+              .status(404)
+              .json({ success: false, message: "Issue not found" });
+          }
+
+          if (issue.status !== "pending") {
+            return res
+              .status(400)
+              .json({
+                success: false,
+                message: "Only pending issues can be rejected",
+              });
+          }
+
+          // Update status
+          const result = await issuesCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { status: "rejected", rejectedAt: new Date() } }
+          );
+
+          // Tracking log
+          await logTracking(
+            issue.trackingId || id,
+            "rejected",
+            "admin",
+            "Issue rejected by admin"
+          );
+
+          res.json({
+            success: true,
+            message: "Issue rejected successfully",
+            result,
+          });
+        } catch (error) {
+          console.error("Reject Issue Error:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal Server Error" });
+        }
+      }
+    );
+
     // ------------------- Issue APIs -------------------
 
     app.post("/issues", verifyFBToken, checkBlockedUser, async (req, res) => {
@@ -238,14 +327,7 @@ async function run() {
       });
     });
 
-    // admin: get all issues
-    app.get("/issues/all", verifyFBToken,async (req, res) => {
-      const issues = await issuesCollection
-        .find()
-        .sort({ isBoosted: -1 })
-        .toArray();
-      res.send(issues);
-    });
+    
 
     //issue delete
     app.delete(
