@@ -218,6 +218,11 @@ async function run() {
       res.send(staffs);
     });
 
+    app.get("/admin/users", verifyFBToken, verifyAdmin, async (req, res) => {
+      const users = await userCollection.find({ role: "citizen" }).toArray();
+      res.send(users);
+    });
+
     // ------------------- Reject Issue (Admin) -------------------
     app.patch(
       "/issues/reject/:id",
@@ -269,6 +274,68 @@ async function run() {
             .status(500)
             .json({ success: false, message: "Internal Server Error" });
         }
+      }
+    );
+
+    app.patch(
+      "/issues/assign/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const issueId = req.params.id;
+        const { staffEmail, staffName } = req.body;
+
+        if (!staffEmail) {
+          return res.status(400).send({ message: "Staff email is required" });
+        }
+
+        const result = await issuesCollection.updateOne(
+          { _id: new ObjectId(issueId), status: "pending" },
+          {
+            $set: {
+              assignedStaff: {
+                email: staffEmail,
+                name: staffName,
+              },
+              status: "assigned",
+            },
+          }
+        );
+
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/admin/users/block/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { isBlocked } = req.body;
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isBlocked } }
+        );
+
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/admin/users/unblock/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isBlocked: false } }
+        );
+
+        res.send(result);
       }
     );
 
