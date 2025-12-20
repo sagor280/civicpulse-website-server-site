@@ -306,6 +306,8 @@ async function run() {
       }
     );
 
+    //admin user block & unblock api here......
+
     app.patch(
       "/admin/users/block/:id",
       verifyFBToken,
@@ -338,6 +340,38 @@ async function run() {
         res.send(result);
       }
     );
+
+    app.post("/staff", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const { name, email, password, phone, photoURL } = req.body;
+
+        // Firebase Auth create
+        const userRecord = await admin.auth().createUser({
+          email,
+          password,
+          displayName: name,
+          photoURL,
+        });
+
+        // Save in DB
+        const staffData = {
+          uid: userRecord.uid,
+          displayName: name,
+          email,
+          phone,
+          photoURL,
+          role: "staff",
+          isBlocked: false,
+          createdAt: new Date(),
+        };
+
+        await userCollection.insertOne(staffData);
+
+        res.send({ success: true, message: "Staff created successfully" });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
 
     // ------------------- Issue APIs -------------------
 
