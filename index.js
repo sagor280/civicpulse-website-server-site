@@ -35,8 +35,6 @@ const verifyFBToken = async (req, res, next) => {
   }
 };
 
-
-
 // MongoDB Connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@sagorkumar.isv1anl.mongodb.net/?appName=SagorKumar`;
 const client = new MongoClient(uri, {
@@ -143,7 +141,7 @@ async function run() {
       res.json({ role: user?.role || "user" });
     });
 
-    // --- NEW: Get user ID by email 
+    // --- NEW: Get user ID by email
     app.get("/users/:email/id", verifyFBToken, async (req, res) => {
       try {
         const email = req.params.email;
@@ -201,8 +199,6 @@ async function run() {
       }
     });
 
-    
-
     // ------------------- All Issues (Admin) -------------------
     app.get("/issues/all", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
@@ -215,6 +211,11 @@ async function run() {
         console.error("Get All Issues Error:", err);
         res.status(500).json({ message: "Failed to fetch issues" });
       }
+    });
+
+    app.get("/users/staff", verifyFBToken, verifyAdmin, async (req, res) => {
+      const staffs = await userCollection.find({ role: "staff" }).toArray();
+      res.send(staffs);
     });
 
     // ------------------- Reject Issue (Admin) -------------------
@@ -237,12 +238,10 @@ async function run() {
           }
 
           if (issue.status !== "pending") {
-            return res
-              .status(400)
-              .json({
-                success: false,
-                message: "Only pending issues can be rejected",
-              });
+            return res.status(400).json({
+              success: false,
+              message: "Only pending issues can be rejected",
+            });
           }
 
           // Update status
@@ -326,8 +325,6 @@ async function run() {
         trackingId,
       });
     });
-
-    
 
     //issue delete
     app.delete(
