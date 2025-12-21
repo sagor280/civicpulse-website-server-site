@@ -524,6 +524,22 @@ async function run() {
 
     // ------------------- Payment APIs -------------------
 
+    // GET all payments (Admin)
+    app.get("/payments", verifyFBToken, verifyAdmin, async (req, res) => {
+      const { status, type } = req.query;
+      const query = {};
+
+      if (status) query.status = status;
+      if (type) query.paymentType = type;
+
+      const payments = await paymentCollection
+        .find(query)
+        .sort({ paidAt: -1 })
+        .toArray();
+
+      res.send(payments);
+    });
+
     app.post("/payment-checkout-session", verifyFBToken, async (req, res) => {
       const { Name, userId, email, price } = req.body;
 
@@ -602,44 +618,33 @@ async function run() {
           const Issueid = session.metadata.Issueid;
           const trackingId = session.metadata.trackingId;
 
-          // Update issue priority
           await issuesCollection.updateOne(
             { _id: new ObjectId(Issueid) },
             { $set: { priority: "high" } }
           );
 
-          // Record payment
           const payment = {
-            IssueId: Issueid,
-            IssueName: session.metadata.Issuetitle,
+            email: session.customer_email,
             amount: session.amount_total / 100,
             currency: session.currency,
-            customerEmail: session.customer_email,
             transactionId,
-            paymentStatus: session.payment_status,
+            status: "success",
             paymentType: "Boosting",
             paidAt: new Date(),
             trackingId,
           };
+
           await paymentCollection.insertOne(payment);
 
-          // Record tracking log
-          const trackingExist = await trackingsCollection.findOne({
+          await trackingsCollection.insertOne({
+            trackingId,
             transactionId,
-            Boosting: "Boost the issue",
+            status: "pending",
+            updatedBy: Issueid,
+            role: "citizen",
+            message: "Issue boosted by citizen",
+            createdAt: new Date(),
           });
-          if (!trackingExist) {
-            await trackingsCollection.insertOne({
-              trackingId,
-              transactionId,
-              status: "pending",
-              Boosting: "Boost the issue",
-              updatedBy: Issueid,
-              role: "citizen",
-              message: "Issue boosted by citizen",
-              createdAt: new Date(),
-            });
-          }
 
           return res.json({
             success: true,
@@ -656,51 +661,93 @@ async function run() {
       }
     });
 
-    app.patch("/payment-success", verifyFBToken, async (req, res) => {
-      const { session_id } = req.query;
-      const session = await stripe.checkout.sessions.retrieve(session_id);
+   app.patch('/payment-success', async (req, res) => {
+  try {
+    const sessionId = req.query.session_id;
+    if (!sessionId) {
+      return res.status(400).json({ message: "Session ID is required" });
+    }
 
-      if (session.payment_status !== "paid")
-        return res.status(400).json({ message: "Payment not completed" });
+    // Retrieve session from Stripe
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const transactionId = session.payment_intent;
 
-      const { email, userId } = session.metadata;
+    // Check if payment already exists
+    const paymentExist = await paymentCollection.findOne({ transactionId });
+    if (paymentExist) {
+      return res.send({
+        message: 'Payment already exists',
+        transactionId,
+        trackingId: paymentExist.trackingId || null
+      });
+    }
 
+    // Get user info from session metadata
+    const { email, userId } = session.metadata;
+
+    if (session.payment_status === 'paid') {
+      // Update user to premium
+      const updateResult = await userCollection.updateOne(
+        { _id: new ObjectId(userId) },
+        { $set: { isPremium: true } }
+      );
+
+      // Insert payment record
       const payment = {
-        userId,
-        email,
         amount: session.amount_total / 100,
         currency: session.currency,
-        transactionId: session.id,
-        paymentIntentId: session.payment_intent,
-        status: "success",
-        createdAt: new Date(),
+        customerEmail: email,
+        userId,
+        transactionId,
+        paymentStatus: session.payment_status,
+        paymentType: 'Subscription',
+        paidAt: new Date(),
+        trackingId: userId // initially trackingId = userId
       };
 
-      await paymentCollection.insertOne(payment);
-      await userCollection.updateOne({ email }, { $set: { isPremium: true } });
+      const resultPayment = await paymentCollection.insertOne(payment);
 
-      // 🔹 Generate tracking for payment
+      // Generate tracking
       const trackingId = generateTrackingId();
       await trackingsCollection.insertOne({
         trackingId,
-        status: "paid",
+        status: 'paid',
         updatedBy: userId,
-        role: "citizen",
+        role: 'citizen',
         message: `User ${email} upgraded to premium`,
-        createdAt: new Date(),
+        createdAt: new Date()
       });
 
-      res.json({ transactionId: session.id, trackingId });
-    });
+      // Optionally, update payment record with new trackingId
+      await paymentCollection.updateOne(
+        { _id: resultPayment.insertedId },
+        { $set: { trackingId } }
+      );
 
-    await client.db("admin").command({ ping: 1 });
+      return res.send({
+        success: true,
+        modifyUser: updateResult,
+        trackingId,
+        transactionId,
+        paymentInfo: resultPayment
+      });
+    }
+
+    return res.send({ success: false, message: 'Payment not completed' });
+  } catch (err) {
+    console.error("Payment Success Error:", err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+ await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB successfully!");
   } finally {
   }
 }
 
-run().catch(console.error);
 
+run().catch(console.error);
+  
 app.get("/", (req, res) => res.send("civicpluse running...!"));
 
 app.listen(port, () => console.log(`Server listening on port ${port}`));
