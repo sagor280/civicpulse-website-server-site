@@ -343,20 +343,20 @@ async function run() {
 
     app.post("/staff", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
-        const { name, email, password, phone, photoURL } = req.body;
+        const { displayName, email, password, phone, photoURL } = req.body;
 
         // Firebase Auth create
         const userRecord = await admin.auth().createUser({
           email,
           password,
-          displayName: name,
+          displayName,
           photoURL,
         });
 
         // Save in DB
         const staffData = {
           uid: userRecord.uid,
-          displayName: name,
+          displayName,
           email,
           phone,
           photoURL,
@@ -371,6 +371,43 @@ async function run() {
       } catch (error) {
         res.status(500).send({ message: error.message });
       }
+    });
+
+    app.delete("/staff/:id", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const staff = await userCollection.findOne({ _id: new ObjectId(id) });
+
+        // Firebase delete
+        await admin.auth().deleteUser(staff.uid);
+
+        // DB delete
+        await userCollection.deleteOne({ _id: new ObjectId(id) });
+
+        res.send({ success: true, message: "Staff deleted" });
+      } catch (error) {
+        res.status(500).send({ message: error.message });
+      }
+    });
+
+    app.patch("/staff/:id", verifyFBToken, verifyAdmin, async (req, res) => {
+      const { id } = req.params;
+      const { displayName, phone, photoURL } = req.body;
+
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            displayName,
+            phone,
+            photoURL,
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+      res.send(result);
     });
 
     // ------------------- Issue APIs -------------------
