@@ -223,6 +223,18 @@ async function run() {
       res.send(users);
     });
 
+    app.get("/admin/profile", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const email = req.decoded_email; 
+        const user = await userCollection.findOne({ email });
+        if (!user) return res.status(404).json({ message: "Admin not found" });
+        res.json(user);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
     // ------------------- Reject Issue (Admin) -------------------
     app.patch(
       "/issues/reject/:id",
@@ -661,93 +673,92 @@ async function run() {
       }
     });
 
-   app.patch('/payment-success', async (req, res) => {
-  try {
-    const sessionId = req.query.session_id;
-    if (!sessionId) {
-      return res.status(400).json({ message: "Session ID is required" });
-    }
+    app.patch("/payment-success", async (req, res) => {
+      try {
+        const sessionId = req.query.session_id;
+        if (!sessionId) {
+          return res.status(400).json({ message: "Session ID is required" });
+        }
 
-    // Retrieve session from Stripe
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-    const transactionId = session.payment_intent;
+        // Retrieve session from Stripe
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        const transactionId = session.payment_intent;
 
-    // Check if payment already exists
-    const paymentExist = await paymentCollection.findOne({ transactionId });
-    if (paymentExist) {
-      return res.send({
-        message: 'Payment already exists',
-        transactionId,
-        trackingId: paymentExist.trackingId || null
-      });
-    }
+        // Check if payment already exists
+        const paymentExist = await paymentCollection.findOne({ transactionId });
+        if (paymentExist) {
+          return res.send({
+            message: "Payment already exists",
+            transactionId,
+            trackingId: paymentExist.trackingId || null,
+          });
+        }
 
-    // Get user info from session metadata
-    const { email, userId } = session.metadata;
+        // Get user info from session metadata
+        const { email, userId } = session.metadata;
 
-    if (session.payment_status === 'paid') {
-      // Update user to premium
-      const updateResult = await userCollection.updateOne(
-        { _id: new ObjectId(userId) },
-        { $set: { isPremium: true } }
-      );
+        if (session.payment_status === "paid") {
+          // Update user to premium
+          const updateResult = await userCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { isPremium: true } }
+          );
 
-      // Insert payment record
-      const payment = {
-        amount: session.amount_total / 100,
-        currency: session.currency,
-        customerEmail: email,
-        userId,
-        transactionId,
-        paymentStatus: session.payment_status,
-        paymentType: 'Subscription',
-        paidAt: new Date(),
-        trackingId: userId // initially trackingId = userId
-      };
+          // Insert payment record
+          const payment = {
+            amount: session.amount_total / 100,
+            currency: session.currency,
+            customerEmail: email,
+            userId,
+            transactionId,
+            paymentStatus: session.payment_status,
+            paymentType: "Subscription",
+            paidAt: new Date(),
+            trackingId: userId, // initially trackingId = userId
+          };
 
-      const resultPayment = await paymentCollection.insertOne(payment);
+          const resultPayment = await paymentCollection.insertOne(payment);
 
-      // Generate tracking
-      const trackingId = generateTrackingId();
-      await trackingsCollection.insertOne({
-        trackingId,
-        status: 'paid',
-        updatedBy: userId,
-        role: 'citizen',
-        message: `User ${email} upgraded to premium`,
-        createdAt: new Date()
-      });
+          // Generate tracking
+          const trackingId = generateTrackingId();
+          await trackingsCollection.insertOne({
+            trackingId,
+            status: "paid",
+            updatedBy: userId,
+            role: "citizen",
+            message: `User ${email} upgraded to premium`,
+            createdAt: new Date(),
+          });
 
-      // Optionally, update payment record with new trackingId
-      await paymentCollection.updateOne(
-        { _id: resultPayment.insertedId },
-        { $set: { trackingId } }
-      );
+          // Optionally, update payment record with new trackingId
+          await paymentCollection.updateOne(
+            { _id: resultPayment.insertedId },
+            { $set: { trackingId } }
+          );
 
-      return res.send({
-        success: true,
-        modifyUser: updateResult,
-        trackingId,
-        transactionId,
-        paymentInfo: resultPayment
-      });
-    }
+          return res.send({
+            success: true,
+            modifyUser: updateResult,
+            trackingId,
+            transactionId,
+            paymentInfo: resultPayment,
+          });
+        }
 
-    return res.send({ success: false, message: 'Payment not completed' });
-  } catch (err) {
-    console.error("Payment Success Error:", err);
-    res.status(500).json({ message: "Internal Server Error" });
-  }
-});
- await client.db("admin").command({ ping: 1 });
+        return res.send({ success: false, message: "Payment not completed" });
+      } catch (err) {
+        console.error("Payment Success Error:", err);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+    await client.db("admin").command({ ping: 1 });
     console.log("Connected to MongoDB successfully!");
   } finally {
   }
 }
 
-
 run().catch(console.error);
-  
+
 app.get("/", (req, res) => res.send("civicpluse running...!"));
 
 app.listen(port, () => console.log(`Server listening on port ${port}`));
