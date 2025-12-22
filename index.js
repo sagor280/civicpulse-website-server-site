@@ -424,23 +424,69 @@ async function run() {
       }
     });
 
-    app.patch("/staff/:id", verifyFBToken, verifyAdmin, async (req, res) => {
-      const { id } = req.params;
-      const { displayName, phone, photoURL } = req.body;
+    
+    app.patch("/staff/:id", verifyFBToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { displayName, phone, photoURL } = req.body;
+        const user = await userCollection.findOne({ _id: new ObjectId(id) });
+        if (!user) return res.status(404).json({ message: "User not found" });
 
-      const result = await userCollection.updateOne(
-        { _id: new ObjectId(id) },
-        {
+        
+        if (req.decoded_email !== user.email) {
+          const requester = await userCollection.findOne({
+            email: req.decoded_email,
+          });
+          if (!requester || requester.role !== "admin") {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+       
+        const updateDoc = {
           $set: {
             displayName,
             phone,
-            photoURL,
+            ...(photoURL && { photoURL }),
             updatedAt: new Date(),
           },
-        }
-      );
+        };
 
-      res.send(result);
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updateDoc
+        );
+
+        res.json({
+          success: true,
+          message: "Profile updated successfully",
+          result,
+        });
+      } catch (err) {
+        console.error("Staff update error:", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    
+    app.get("/staff/profile", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const user = await userCollection.findOne({ email });
+        if (!user) return res.status(404).json({ message: "Staff not found" });
+
+        res.json({
+          id: user._id.toString(),
+          displayName: user.displayName,
+          email: user.email,
+          phone: user.phone || "",
+          photoURL: user.photoURL || null,
+          role: user.role,
+        });
+      } catch (err) {
+        console.error("Get staff profile error:", err);
+        res.status(500).json({ message: "Server error" });
+      }
     });
 
     // ------------------- Issue APIs -------------------
@@ -595,11 +641,9 @@ async function run() {
           };
 
           if (!flow[issue.status]?.includes(status)) {
-            return res
-              .status(400)
-              .json({
-                message: `Cannot change from ${issue.status} to ${status}`,
-              });
+            return res.status(400).json({
+              message: `Cannot change from ${issue.status} to ${status}`,
+            });
           }
 
           // Update issue
