@@ -289,15 +289,25 @@ async function run() {
         }
 
         const { email, createrEmail } = req.body;
-        if (!email) {
-          return res.status(400).send({ message: "Log in first" });
-        }
-        if (createrEmail === email) {
+        if (!email) return res.status(400).send({ message: "Log in first" });
+        if (createrEmail === email)
           return res
             .status(400)
             .send({ message: "You can't upvote your own issue" });
+
+        // Find the issue first
+        const issue = await issuesCollection.findOne({ _id: new ObjectId(id) });
+        if (!issue) return res.status(404).send({ message: "Issue not found" });
+
+        // যদি upvotes accidentally array হয়ে যায়, number এ convert করো
+        if (Array.isArray(issue.upvotes)) {
+          await issuesCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { upvotes: issue.upvotes.length } }
+          );
         }
 
+        // Update upvote
         const result = await issuesCollection.updateOne(
           { _id: new ObjectId(id), upvotedBy: { $ne: email } },
           { $inc: { upvotes: 1 }, $addToSet: { upvotedBy: email } }
@@ -349,6 +359,23 @@ async function run() {
       } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // ================= Issue Timeline API =================
+    app.get("/issues/:trackingId/timeline", verifyFBToken, async (req, res) => {
+      try {
+        const { trackingId } = req.params;
+
+        const timeline = await trackingsCollection
+          .find({ trackingId })
+          .sort({ createdAt: 1 }) // oldest → newest
+          .toArray();
+
+        res.send(timeline);
+      } catch (error) {
+        console.error("Timeline fetch error:", error);
+        res.status(500).json({ message: "Failed to load timeline" });
       }
     });
 
@@ -838,64 +865,77 @@ async function run() {
     );
 
     // Boosting payment success
-    app.patch("/payment-success-boosting", async (req, res) => {
+    app.patch("/payment-success/boosting", async (req, res) => {
       try {
         const sessionId = req.query.session_id;
-        if (!sessionId)
+        if (!sessionId) {
           return res.status(400).json({ message: "Session ID missing" });
+        }
 
         const session = await stripe.checkout.sessions.retrieve(sessionId);
         const transactionId = session.payment_intent;
 
         const paymentExist = await paymentCollection.findOne({ transactionId });
-        if (paymentExist)
+        if (paymentExist) {
           return res.json({
             message: "Payment already exists",
             transactionId,
             trackingId: session.metadata.trackingId,
           });
-
-        if (session.payment_status === "paid") {
-          const Issueid = session.metadata.Issueid;
-          const trackingId = session.metadata.trackingId;
-
-          await issuesCollection.updateOne(
-            { _id: new ObjectId(Issueid) },
-            { $set: { priority: "high" } }
-          );
-
-          const payment = {
-            email: session.customer_email,
-            amount: session.amount_total / 100,
-            currency: session.currency,
-            transactionId,
-            status: "success",
-            paymentType: "Boosting",
-            paidAt: new Date(),
-            trackingId,
-          };
-
-          await paymentCollection.insertOne(payment);
-
-          await trackingsCollection.insertOne({
-            trackingId,
-            transactionId,
-            status: "pending",
-            updatedBy: Issueid,
-            role: "citizen",
-            message: "Issue boosted by citizen",
-            createdAt: new Date(),
-          });
-
-          return res.json({
-            success: true,
-            transactionId,
-            trackingId,
-            paymentInfo: payment,
-          });
         }
 
-        res.status(400).json({ message: "Payment not completed" });
+        if (session.payment_status !== "paid") {
+          return res.status(400).json({ message: "Payment not completed" });
+        }
+
+        const Issueid = session.metadata.Issueid;
+        const trackingId = session.metadata.trackingId;
+
+        // 🔹 Check already boosted
+        const issue = await issuesCollection.findOne({
+          _id: new ObjectId(Issueid),
+        });
+
+        if (issue?.priority === "high") {
+          return res.status(400).json({ message: "Issue already boosted" });
+        }
+
+        // 🔹 Update issue priority
+        await issuesCollection.updateOne(
+          { _id: new ObjectId(Issueid) },
+          { $set: { priority: "high" } }
+        );
+
+        // 🔹 Save payment
+        const payment = {
+          email: session.customer_email,
+          amount: session.amount_total / 100,
+          currency: session.currency,
+          transactionId,
+          status: "success",
+          paymentType: "Boosting",
+          paidAt: new Date(),
+          trackingId,
+        };
+
+        await paymentCollection.insertOne(payment);
+
+        // 🔹 Timeline / Tracking
+        await trackingsCollection.insertOne({
+          trackingId,
+          transactionId,
+          status: "boosted",
+          message: "Issue boosted by citizen (৳100 payment)",
+          updatedBy: session.customer_email,
+          role: "citizen",
+          createdAt: new Date(),
+        });
+
+        res.json({
+          success: true,
+          transactionId,
+          trackingId,
+        });
       } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Boost payment verification failed" });
