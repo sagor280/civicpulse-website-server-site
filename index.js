@@ -162,7 +162,7 @@ async function run() {
       res.json({ role: user?.role || "user" });
     });
 
-    // --- NEW: Get user ID by email
+    // Get user ID by email
     app.get("/users/:email/id", verifyFBToken, async (req, res) => {
       try {
         const email = req.params.email;
@@ -225,12 +225,108 @@ async function run() {
       try {
         const issues = await issuesCollection
           .find()
-          .sort({ isBoosted: -1 })
+          .sort({ isBoosted: -1, createdAt: -1 })
           .toArray();
         res.json(issues);
       } catch (err) {
         console.error("Get All Issues Error:", err);
         res.status(500).json({ message: "Failed to fetch issues" });
+      }
+    });
+    //Server-side Search, Filter, Pagination
+    // Public: Search + Filter + Pagination
+    //get all issue
+    app.get("/issues", async (req, res) => {
+      let query = {};
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 6;
+      const skip = (page - 1) * limit;
+      const { status, priority, category, searchText } = req.query;
+      if (searchText) {
+        query.$or = [
+          { title: { $regex: searchText, $options: "i" } },
+          { category: { $regex: searchText, $options: "i" } },
+          { location: { $regex: searchText, $options: "i" } },
+        ];
+      }
+
+      if (status) {
+        query.status = status;
+      }
+      if (priority) {
+        query.priority = priority;
+      }
+      if (category) {
+        query.category = category;
+      }
+      const total = await issuesCollection.countDocuments(query);
+      const cursor = await issuesCollection
+        .find(query)
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+      res.send({
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        issues: cursor,
+      });
+    });
+
+    // ------------------- Upvote API -------------------
+
+    app.patch(
+      "/issues/upvote/:id",
+      verifyFBToken,
+      checkBlockedUser,
+      async (req, res) => {
+        const id = req.params.id;
+
+        // Validate ObjectId
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid issue ID" });
+        }
+
+        const { email, createrEmail } = req.body;
+        if (!email) {
+          return res.status(400).send({ message: "Log in first" });
+        }
+        if (createrEmail === email) {
+          return res
+            .status(400)
+            .send({ message: "You can't upvote your own issue" });
+        }
+
+        const result = await issuesCollection.updateOne(
+          { _id: new ObjectId(id), upvotedBy: { $ne: email } },
+          { $inc: { upvotes: 1 }, $addToSet: { upvotedBy: email } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(400).send({ message: "Already upvoted" });
+        }
+
+        res.send({
+          success: true,
+          message: "Upvoted successfully",
+        });
+      }
+    );
+
+    // ------------------- Issue Details API -------------------
+    app.get("/issues/:id", verifyFBToken, async (req, res) => {
+      try {
+        const issueId = req.params.id;
+        const issue = await issuesCollection.findOne({
+          _id: new ObjectId(issueId),
+        });
+        if (!issue) return res.status(404).json({ message: "Issue not found" });
+
+        res.json(issue);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to fetch issue details" });
       }
     });
 
@@ -424,7 +520,6 @@ async function run() {
       }
     });
 
-    
     app.patch("/staff/:id", verifyFBToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -432,7 +527,6 @@ async function run() {
         const user = await userCollection.findOne({ _id: new ObjectId(id) });
         if (!user) return res.status(404).json({ message: "User not found" });
 
-        
         if (req.decoded_email !== user.email) {
           const requester = await userCollection.findOne({
             email: req.decoded_email,
@@ -442,7 +536,6 @@ async function run() {
           }
         }
 
-       
         const updateDoc = {
           $set: {
             displayName,
@@ -468,7 +561,6 @@ async function run() {
       }
     });
 
-    
     app.get("/staff/profile", verifyFBToken, async (req, res) => {
       try {
         const email = req.decoded_email;
@@ -520,7 +612,8 @@ async function run() {
         status: "pending",
         priority: "normal",
         assignedStaff: null,
-        upvotes: [],
+        upvotes: 0, // counter
+        upvotedBy: [], // ✅ এইটা add করতে হবে
         createdAt: new Date(),
         trackingId,
       };
