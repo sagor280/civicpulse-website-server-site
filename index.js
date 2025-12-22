@@ -104,6 +104,27 @@ async function run() {
       }
     };
 
+    const verifyStaff = async (req, res, next) => {
+      try {
+        const email = req.decoded_email;
+        const user = await userCollection.findOne({ email });
+
+        if (!user || user.role !== "staff") {
+          return res.status(403).json({ message: "Staff access required" });
+        }
+
+        if (user.isBlocked) {
+          return res.status(403).json({ message: "Staff is blocked" });
+        }
+
+        req.staff = user;
+        next();
+      } catch (err) {
+        console.error("verifyStaff Error:", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    };
+
     // ------------------- User APIs -------------------
 
     // Create user
@@ -225,7 +246,7 @@ async function run() {
 
     app.get("/admin/profile", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
-        const email = req.decoded_email; 
+        const email = req.decoded_email;
         const user = await userCollection.findOne({ email });
         if (!user) return res.status(404).json({ message: "Admin not found" });
         res.json(user);
@@ -533,6 +554,77 @@ async function run() {
         res.status(500).json({ message: "Server error" });
       }
     });
+
+    // GET /staff/issues
+    app.get("/staff/issues", verifyFBToken, verifyStaff, async (req, res) => {
+      try {
+        const issues = await issuesCollection
+          .find({ "assignedStaff.email": req.staff.email })
+          .sort({ priority: 1, createdAt: -1 })
+          .toArray();
+        res.json(issues);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // PATCH /staff/issues/:id/status
+    app.patch(
+      "/staff/issues/:id/status",
+      verifyFBToken,
+      verifyStaff,
+      async (req, res) => {
+        try {
+          const issueId = req.params.id;
+          const { status } = req.body;
+
+          const issue = await issuesCollection.findOne({
+            _id: new ObjectId(issueId),
+          });
+          if (!issue)
+            return res.status(404).json({ message: "Issue not found" });
+
+          // Allowed flow
+          const flow = {
+            assigned: ["in-progress"],
+            pending: ["in-progress"],
+            "in-progress": ["working"],
+            working: ["resolved"],
+            resolved: ["closed"],
+          };
+
+          if (!flow[issue.status]?.includes(status)) {
+            return res
+              .status(400)
+              .json({
+                message: `Cannot change from ${issue.status} to ${status}`,
+              });
+          }
+
+          // Update issue
+          await issuesCollection.updateOne(
+            { _id: new ObjectId(issueId) },
+            { $set: { status, updatedAt: new Date() } }
+          );
+
+          // Add tracking
+          await trackingsCollection.insertOne({
+            trackingId: issue.trackingId,
+            status,
+            updatedBy: req.staff._id.toString(),
+            role: "staff",
+            message: `Status changed to ${status} by staff`,
+            createdAt: new Date(),
+          });
+
+          res.json({ success: true });
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ message: "Server error" });
+        }
+      }
+    );
 
     // ------------------- Payment APIs -------------------
 
