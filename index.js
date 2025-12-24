@@ -882,6 +882,19 @@ async function run() {
       }
     });
 
+      //Lates Issue api
+
+    app.get('/issues/resolved/latest', async (req, res) => {
+      const result = await issuesCollection
+        .find({ status: "resolved" })
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
+
+      res.send(result);
+    });
+
+
     // GET /staff/issues
     app.get("/staff/issues", verifyFBToken, verifyStaff, async (req, res) => {
       try {
