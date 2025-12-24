@@ -233,9 +233,7 @@ async function run() {
         res.status(500).json({ message: "Failed to fetch issues" });
       }
     });
-    //Server-side Search, Filter, Pagination
-    // Public: Search + Filter + Pagination
-    //get all issue
+
     app.get("/issues", async (req, res) => {
       let query = {};
       const page = parseInt(req.query.page) || 1;
@@ -276,14 +274,10 @@ async function run() {
 
     // ------------------- Upvote API -------------------
 
-    app.patch(
-      "/issues/upvote/:id",
-      verifyFBToken,
-      checkBlockedUser,
+    app.patch("/issues/upvote/:id",verifyFBToken,checkBlockedUser,
       async (req, res) => {
         const id = req.params.id;
 
-        // Validate ObjectId
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ message: "Invalid issue ID" });
         }
@@ -295,11 +289,9 @@ async function run() {
             .status(400)
             .send({ message: "You can't upvote your own issue" });
 
-        // Find the issue first
         const issue = await issuesCollection.findOne({ _id: new ObjectId(id) });
         if (!issue) return res.status(404).send({ message: "Issue not found" });
 
-        // যদি upvotes accidentally array হয়ে যায়, number এ convert করো
         if (Array.isArray(issue.upvotes)) {
           await issuesCollection.updateOne(
             { _id: new ObjectId(id) },
@@ -323,6 +315,213 @@ async function run() {
         });
       }
     );
+
+    app.get("/dashboard/citizen-stats", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const user = await userCollection.findOne({ email });
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        const userId = user._id.toString();
+
+        const totalIssues = await issuesCollection.countDocuments({
+          createdBy: userId,
+        });
+        const pendingIssues = await issuesCollection.countDocuments({
+          createdBy: userId,
+          status: "pending",
+        });
+        const inProgressIssues = await issuesCollection.countDocuments({
+          createdBy: userId,
+          status: "in-progress",
+        });
+        const resolvedIssues = await issuesCollection.countDocuments({
+          createdBy: userId,
+          status: "resolved",
+        });
+
+        const totalPayments = await paymentCollection.countDocuments({
+          userId,
+        });
+
+        res.json({
+          totalIssues,
+          pendingIssues,
+          inProgressIssues,
+          resolvedIssues,
+          totalPayments,
+          isBlocked: user.isBlocked,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    app.get("/dashboard/issues-stats",verifyFBToken,verifyAdmin,
+      async (req, res) => {
+        const stats = await issuesCollection
+          .aggregate([
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                pending: {
+                  $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
+                },
+                resolved: {
+                  $sum: { $cond: [{ $eq: ["$status", "resolved"] }, 1, 0] },
+                },
+                rejected: {
+                  $sum: { $cond: [{ $eq: ["$status", "rejected"] }, 1, 0] },
+                },
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(
+          stats[0] || { total: 0, pending: 0, resolved: 0, rejected: 0 }
+        );
+      }
+    );
+
+    app.get("/dashboard/latest-issues",verifyFBToken,verifyAdmin,
+      async (req, res) => {
+        const latestIssues = await issuesCollection
+          .aggregate([{ $sort: { createdAt: -1 } }, { $limit: 6 }])
+          .toArray();
+
+        res.send(latestIssues);
+      }
+    );
+
+    app.get("/dashboard/payment-stats",verifyFBToken,verifyAdmin,
+      async (req, res) => {
+        const stats = await paymentCollection
+          .aggregate([
+            {
+              $group: {
+                _id: null,
+                totalPayments: { $sum: 1 },
+                totalAmount: { $sum: "$amount" },
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(stats[0] || { totalPayments: 0, totalAmount: 0 });
+      }
+    );
+
+    // Latest Payments
+    app.get("/dashboard/latest-payments",verifyFBToken,verifyAdmin,
+      async (req, res) => {
+        const latestPayments = await paymentCollection
+          .aggregate([{ $sort: { createdAt: -1 } }, { $limit: 6 }])
+          .toArray();
+
+        res.send(latestPayments);
+      }
+    );
+
+    app.get("/dashboard/latest-users",verifyFBToken,verifyAdmin,
+      async (req, res) => {
+        const latestUsers = await userCollection
+          .aggregate([
+            { $sort: { createdAt: -1 } },
+            { $limit: 6 },
+            { $project: { displayName: 1, name:1,customerEmail:1, email: 1, role: 1, createdAt: 1 } },
+          ])
+          .toArray();
+
+        res.send(latestUsers);
+     
+
+      }
+    );
+
+    // ================= Staff Dashboard Stats =================
+    app.get("/staff/dashboard/stats",verifyFBToken,verifyStaff,async (req, res) => {
+        try {
+          const email = req.staff.email;
+
+          const assignedIssuesCount = await issuesCollection.countDocuments({
+            "assignedStaff.email": email,
+          });
+
+          const resolvedIssuesCount = await issuesCollection.countDocuments({
+            "assignedStaff.email": email,
+            status: "resolved",
+          });
+
+          const pendingIssuesCount = await issuesCollection.countDocuments({
+            "assignedStaff.email": email,
+            status: "pending",
+          });
+
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+
+          const todayEnd = new Date();
+          todayEnd.setHours(23, 59, 59, 999);
+
+          const todaysTasksCount = await issuesCollection.countDocuments({
+            "assignedStaff.email": email,
+            createdAt: { $gte: todayStart, $lte: todayEnd },
+          });
+
+          res.send({
+            assignedIssuesCount,
+            resolvedIssuesCount,
+            pendingIssuesCount,
+            todaysTasksCount,
+          });
+        } catch (err) {
+          console.error("Staff Dashboard Stats Error:", err);
+          res.status(500).json({ message: "Internal Server Error" });
+        }
+      }
+    );
+
+    // ================= Latest Assigned Issues =================
+    app.get("/staff/dashboard/latest-issues",verifyFBToken,verifyStaff,
+      async (req, res) => {
+        try {
+          const email = req.staff.email;
+
+          const latestIssues = await issuesCollection
+            .find({ "assignedStaff.email": email })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .toArray();
+
+          res.send(latestIssues);
+        } catch (err) {
+          console.error("Latest Staff Issues Error:", err);
+          res.status(500).json({ message: "Internal Server Error" });
+        }
+      }
+    );
+
+    // ================= Staff Profile =================
+    app.get("/staff/profile", verifyFBToken, verifyStaff, async (req, res) => {
+      try {
+        const user = req.staff;
+
+        res.json({
+          id: user._id.toString(),
+          displayName: user.displayName,
+          email: user.email,
+          phone: user.phone || "",
+          photoURL: user.photoURL || null,
+          role: user.role,
+        });
+      } catch (err) {
+        console.error("Get Staff Profile Error:", err);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
 
     // ------------------- Issue Details API -------------------
     app.get("/issues/:id", verifyFBToken, async (req, res) => {
@@ -380,10 +579,7 @@ async function run() {
     });
 
     // ------------------- Reject Issue (Admin) -------------------
-    app.patch(
-      "/issues/reject/:id",
-      verifyFBToken,
-      verifyAdmin,
+    app.patch("/issues/reject/:id",verifyFBToken,verifyAdmin,
       async (req, res) => {
         try {
           const { id } = req.params;
@@ -433,10 +629,7 @@ async function run() {
       }
     );
 
-    app.patch(
-      "/issues/assign/:id",
-      verifyFBToken,
-      verifyAdmin,
+    app.patch("/issues/assign/:id",verifyFBToken,verifyAdmin,
       async (req, res) => {
         const issueId = req.params.id;
         const { staffEmail, staffName } = req.body;
@@ -464,10 +657,7 @@ async function run() {
 
     //admin user block & unblock api here......
 
-    app.patch(
-      "/admin/users/block/:id",
-      verifyFBToken,
-      verifyAdmin,
+    app.patch("/admin/users/block/:id",verifyFBToken,verifyAdmin,
       async (req, res) => {
         const { id } = req.params;
         const { isBlocked } = req.body;
@@ -481,10 +671,7 @@ async function run() {
       }
     );
 
-    app.patch(
-      "/admin/users/unblock/:id",
-      verifyFBToken,
-      verifyAdmin,
+    app.patch("/admin/users/unblock/:id",verifyFBToken,verifyAdmin,
       async (req, res) => {
         const id = req.params.id;
 
@@ -588,26 +775,6 @@ async function run() {
       }
     });
 
-    app.get("/staff/profile", verifyFBToken, async (req, res) => {
-      try {
-        const email = req.decoded_email;
-        const user = await userCollection.findOne({ email });
-        if (!user) return res.status(404).json({ message: "Staff not found" });
-
-        res.json({
-          id: user._id.toString(),
-          displayName: user.displayName,
-          email: user.email,
-          phone: user.phone || "",
-          photoURL: user.photoURL || null,
-          role: user.role,
-        });
-      } catch (err) {
-        console.error("Get staff profile error:", err);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
-
     // ------------------- Issue APIs -------------------
 
     app.post("/issues", verifyFBToken, checkBlockedUser, async (req, res) => {
@@ -639,8 +806,8 @@ async function run() {
         status: "pending",
         priority: "normal",
         assignedStaff: null,
-        upvotes: 0, // counter
-        upvotedBy: [], // ✅ এইটা add করতে হবে
+        upvotes: 0,
+        upvotedBy: [],
         createdAt: new Date(),
         trackingId,
       };
@@ -664,10 +831,7 @@ async function run() {
     });
 
     //issue delete
-    app.delete(
-      "/issues/:id",
-      verifyFBToken,
-      checkBlockedUser,
+    app.delete("/issues/:id",verifyFBToken,checkBlockedUser,
       async (req, res) => {
         const id = req.params.id;
         const query = { _id: new ObjectId(id) };
@@ -677,10 +841,7 @@ async function run() {
     );
     //issue update api
 
-    app.patch(
-      "/issues/:id",
-      verifyFBToken,
-      checkBlockedUser,
+    app.patch("/issues/:id",verifyFBToken,checkBlockedUser,
       async (req, res) => {
         try {
           const id = req.params.id;
@@ -736,10 +897,7 @@ async function run() {
     });
 
     // PATCH /staff/issues/:id/status
-    app.patch(
-      "/staff/issues/:id/status",
-      verifyFBToken,
-      verifyStaff,
+    app.patch("/staff/issues/:id/status",verifyFBToken,verifyStaff,
       async (req, res) => {
         try {
           const issueId = req.params.id;
@@ -833,10 +991,7 @@ async function run() {
     });
 
     // Create boost session
-    app.post(
-      "/payment-checkout-session/boosting",
-      verifyFBToken,
-      checkBlockedUser,
+    app.post("/payment-checkout-session/boosting",verifyFBToken,checkBlockedUser,
       async (req, res) => {
         const { Issueid, Issuetitle, price, createrEmail, trackingId } =
           req.body;
@@ -891,7 +1046,7 @@ async function run() {
         const Issueid = session.metadata.Issueid;
         const trackingId = session.metadata.trackingId;
 
-        // 🔹 Check already boosted
+        //  Check already boosted
         const issue = await issuesCollection.findOne({
           _id: new ObjectId(Issueid),
         });
@@ -900,13 +1055,12 @@ async function run() {
           return res.status(400).json({ message: "Issue already boosted" });
         }
 
-        // 🔹 Update issue priority
         await issuesCollection.updateOne(
           { _id: new ObjectId(Issueid) },
           { $set: { priority: "high" } }
         );
 
-        // 🔹 Save payment
+        //  Save payment
         const payment = {
           email: session.customer_email,
           amount: session.amount_total / 100,
@@ -919,8 +1073,6 @@ async function run() {
         };
 
         await paymentCollection.insertOne(payment);
-
-        // 🔹 Timeline / Tracking
         await trackingsCollection.insertOne({
           trackingId,
           transactionId,
@@ -962,18 +1114,13 @@ async function run() {
             trackingId: paymentExist.trackingId || null,
           });
         }
-
-        // Get user info from session metadata
         const { email, userId } = session.metadata;
 
         if (session.payment_status === "paid") {
-          // Update user to premium
           const updateResult = await userCollection.updateOne(
             { _id: new ObjectId(userId) },
             { $set: { isPremium: true } }
           );
-
-          // Insert payment record
           const payment = {
             amount: session.amount_total / 100,
             currency: session.currency,
@@ -983,7 +1130,7 @@ async function run() {
             paymentStatus: session.payment_status,
             paymentType: "Subscription",
             paidAt: new Date(),
-            trackingId: userId, // initially trackingId = userId
+            trackingId: userId,
           };
 
           const resultPayment = await paymentCollection.insertOne(payment);
@@ -998,8 +1145,6 @@ async function run() {
             message: `User ${email} upgraded to premium`,
             createdAt: new Date(),
           });
-
-          // Optionally, update payment record with new trackingId
           await paymentCollection.updateOne(
             { _id: resultPayment.insertedId },
             { $set: { trackingId } }
