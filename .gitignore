@@ -1,3 +1,4 @@
 node_modules
 .env
 civicpulse-website-firebase-adminsdk-fbsvc.json
+.vercel

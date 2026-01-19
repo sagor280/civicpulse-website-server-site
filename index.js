@@ -7,7 +7,12 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./civicpulse-website-firebase-adminsdk-fbsvc.json");
+
+
+
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -56,7 +61,7 @@ const generateTrackingId = () => {
 // Start Server and DB
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const db = client.db("civic-pluse-db");
     const userCollection = db.collection("users");
     const issuesCollection = db.collection("issues");
@@ -524,20 +529,25 @@ async function run() {
     });
 
     // ------------------- Issue Details API -------------------
-    app.get("/issues/:id", verifyFBToken, async (req, res) => {
-      try {
-        const issueId = req.params.id;
-        const issue = await issuesCollection.findOne({
-          _id: new ObjectId(issueId),
-        });
-        if (!issue) return res.status(404).json({ message: "Issue not found" });
+    app.get("/issues/:id", async (req, res) => {
+  try {
+    const issueId = req.params.id;
 
-        res.json(issue);
-      } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Failed to fetch issue details" });
-      }
+    const issue = await issuesCollection.findOne({
+      _id: new ObjectId(issueId),
     });
+
+    if (!issue) {
+      return res.status(404).json({ message: "Issue not found" });
+    }
+
+    res.json(issue);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch issue details" });
+  }
+});
+
 
     app.get("/users/staff", verifyFBToken, verifyAdmin, async (req, res) => {
       const staffs = await userCollection.find({ role: "staff" }).toArray();
@@ -1178,8 +1188,8 @@ async function run() {
         res.status(500).json({ message: "Internal Server Error" });
       }
     });
-    await client.db("admin").command({ ping: 1 });
-    console.log("Connected to MongoDB successfully!");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Connected to MongoDB successfully!");
   } finally {
   }
 }
